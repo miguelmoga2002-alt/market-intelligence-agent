@@ -1,0 +1,13 @@
+{
+  "name": "market-intelligence-agent",
+  "version": "1.0.0",
+  "description": "A production AI agent that turns 10-15K daily marketplace listings into the handful of profitable opportunities worth acting on.",
+  "type": "commonjs",
+  "scripts": {
+    "ask": "node examples/ask.js",
+    "watchdog": "node src/monitoring/watchdog.js",
+    "check": "node --check src/agent/agent.js && node --check src/tools/index.js && node --check src/db/queries.js && node --check src/agent/validate.js && node --check src/monitoring/watchdog.js && echo OK"
+  },
+  "license": "MIT",
+  "author": "Miguel Morales García"
+}
