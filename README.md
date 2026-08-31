@@ -4,7 +4,7 @@
 profitable opportunities worth acting on.**
 
 A local LLM (Ollama / Qwen) answers natural-language questions over a live PostgreSQL
-database of 400K+ marketplace listings — *without ever writing SQL itself*. The model
+database of 500K+ marketplace listings — *without ever writing SQL itself*. The model
 chooses **which typed tool to call** and with **which parameters**; deterministic code
 validates every argument against a whitelist and runs read-only, parametrized queries.
 No cloud API, no data leaving the machine.
