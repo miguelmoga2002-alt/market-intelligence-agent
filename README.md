@@ -5,7 +5,8 @@ profitable opportunities worth acting on.**
 
 I built this to stop reading marketplaces by hand. It collects second-hand listings around
 the clock, stores them in PostgreSQL, scores them, and lets me ask questions in plain
-language through a local LLM that never touches the database directly. Everything runs on
+language through a local LLM that never touches the database directly. There was no
+dataset to start from: every row in the database was collected by this system, from zero. Everything runs on
 one server at home. No cloud APIs, no data leaving the machine.
 
 > **Context.** I am self-taught. This is a sanitized extract of a larger system I designed,
@@ -18,8 +19,8 @@ one server at home. No cloud APIs, no data leaving the machine.
 
 ## The problem
 
-The database holds 400K+ listings and grows by 10-15K a day across several product
-categories (PC components, machinery, bikes). Reading that by hand is impossible, and a
+The database I have built with these collectors holds 400K+ listings and grows by
+10-15K a day across several product categories (PC components, machinery, bikes). Reading that by hand is impossible, and a
 fixed set of dashboards cannot answer the questions I actually ask: what is a given part
 going for right now, where is it cheapest, how many sold last month, is this listing a
 good deal. I needed a funnel with judgment: from 10-15K new listings a day down to the
@@ -204,6 +205,19 @@ src/monitoring/  watchdog and health checks
 examples/        runnable examples
 docs/            architecture notes and dashboard screenshots
 ```
+
+## What's next
+
+The pipeline is built as a platform: a new market or a new product category means new
+collectors and a new classifier, while data, scoring, agent, alerts and watchdog stay the
+same. Three things I am working on now:
+
+- **Europe.** Extending the machinery and PC component collectors beyond Spain to other
+  European marketplaces, where the same arbitrage exists with a larger inventory.
+- **Real estate in Spain.** A new vertical on the same loop (capture, classify, value,
+  alert), applied to property listings.
+- **A stronger local model.** Moving the agent from a 14B to a 32B model now that the GPU
+  has room for it, and measuring whether the extra reasoning is worth the latency.
 
 ## Scope
 
