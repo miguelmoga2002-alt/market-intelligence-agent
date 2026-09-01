@@ -40,7 +40,7 @@ const checks = [
       const ageMin = ctx.minutesSinceLastRow;
       return { ok: ageMin < 180, detail: `last row ${ageMin} min ago` };
     },
-    "Inspect the latest ingest log and the DB max(seen_at). If stale, the scraper " +
+    "Inspect the latest ingest log and the DB max(seen_at). If stale, the collector " +
       "step is not writing - check for auth/session errors before restarting."
   ),
 

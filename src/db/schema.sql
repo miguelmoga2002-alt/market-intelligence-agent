@@ -44,7 +44,7 @@ CREATE TABLE sales (
     detected_model  TEXT,
     sold_price      NUMERIC(10,2),
     days_to_sale    INT,
-    source          TEXT NOT NULL DEFAULT 'scraper',
+    source          TEXT NOT NULL DEFAULT 'collector',
     event_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -5,7 +5,7 @@
 ```mermaid
 flowchart TD
     subgraph capture["1. Capture"]
-        S["Scrapers (Playwright)<br/>one per category, on a schedule"]
+        S["Collectors (Playwright)<br/>one per category, on a schedule"]
     end
     subgraph data["2. Data"]
         DB[("PostgreSQL<br/>source of truth")]
@@ -29,10 +29,10 @@ flowchart TD
     class S,DB,P,SC,AG,M,T box;
 ```
 
-**Capture.** One scraper per product category. Each keeps the ids it has already seen and
+**Capture.** One collector per product category. Each keeps the ids it has already seen and
 processes only new listings. A run that returns far fewer rows than the accumulated catalog
-is refused and reported instead of written. Scrapers for different sites run in parallel;
-scrapers for the same site run in series.
+is refused and reported instead of written. Collectors for different sites run in parallel;
+collectors for the same site run in series.
 
 **Data.** PostgreSQL holds everything. A loader classifies each listing (type, category,
 detected model), attaches an estimated value and upserts. Upserts never downgrade a known

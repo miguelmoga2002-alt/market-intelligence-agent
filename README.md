@@ -3,7 +3,7 @@
 **A production AI agent that turns 10-15K daily marketplace listings into the handful of
 profitable opportunities worth acting on.**
 
-I built this to stop reading marketplaces by hand. It scrapes second-hand listings around
+I built this to stop reading marketplaces by hand. It collects second-hand listings around
 the clock, stores them in PostgreSQL, scores them, and lets me ask questions in plain
 language through a local LLM that never touches the database directly. Everything runs on
 one server at home. No cloud APIs, no data leaving the machine.
@@ -30,7 +30,7 @@ good deal. I needed a funnel with judgment: from 10-15K new listings a day down 
 Three layers, each one feeding the next:
 
 ```
-  Scrapers (Playwright) -> PostgreSQL (ingest -> classify -> value)
+  Collectors (Playwright) -> PostgreSQL (ingest -> classify -> value)
   -> Scoring -> LLM agent (Ollama/Qwen, tool calling)
   -> Metabase dashboards + Telegram alerts
 ```
@@ -52,30 +52,29 @@ flowchart LR
 
 ![Ecosystem scale](docs/screenshots/ecosystem-scale.png)
 
-### 1. Scraping
+### 1. Market data capture
 
-One scraper per product category, written in Node.js with Playwright. Each one runs on a
+One collector per product category, written in Node.js with Playwright. Each one runs on a
 schedule, walks the marketplace search results, and appends what it finds to an
 accumulated catalog. It keeps a set of ids it has already seen, so each run only processes
 new listings and stops early when it hits a streak of known ones.
 
 Two things I had to get right here:
 
-- **Stability under bot detection.** The marketplaces actively detect scrapers. Keeping
-  the scrapers stable was most of the work in this layer. How I do it is private.
+- **Stability under bot detection.** The marketplaces actively detect automated traffic. Keeping the collectors stable was most of the work in this layer. How I do it is private.
 - **Never trusting a single run.** A run that returns far fewer listings than the catalog
-  already holds is treated as suspicious. The scraper refuses to overwrite and raises an
+  already holds is treated as suspicious. The collector refuses to overwrite and raises an
   alert instead. I added this after an empty run silently wiped a large catalog and every
   downstream table with it.
 
-Scrapers that hit different sites run in parallel. Scrapers that hit the same site run one
+Collectors that hit different sites run in parallel. Collectors that hit the same site run one
 at a time.
 
 ### 2. Data
 
 PostgreSQL is the source of truth. A loader takes the raw catalog, classifies each listing
 (what kind of item it is, which model it is), attaches an estimated value, and upserts it.
-The upsert never downgrades a known state: once a listing is marked sold, a later scrape
+The upsert never downgrades a known state: once a listing is marked sold, a later capture
 cannot flip it back to available.
 
 I keep the classifier as the only place where classification logic lives. If a rule is
@@ -129,7 +128,7 @@ used. The details are in [docs/architecture.md](docs/architecture.md).
 
 The whole thing has to run unattended, so I spent real effort on the operations side.
 
-**Alerts.** Each scraping cycle pushes its findings to Telegram: new opportunities as
+**Alerts.** Each capture cycle pushes its findings to Telegram: new opportunities as
 individual messages with inline buttons so I can mark a verdict from my phone, and a
 grouped digest at the end. Those verdicts are stored back in the database.
 
@@ -137,7 +136,7 @@ grouped digest at the end. Those verdicts are stored back in the database.
 that a process being alive tells me nothing; I check that each component **produced its
 output**: fresh rows, a regenerated price table, a completed cycle with results, a fraud
 filter that still caught something today. Each check knows the real log pattern of the
-component it watches, because every scraper writes differently and a generic check matches
+component it watches, because every collector writes differently and a generic check matches
 none of them. I tested the checks against old broken logs, not only against a healthy
 system, since zero alerts only proves the absence of false positives.
 
@@ -148,7 +147,7 @@ written to a table, so I can chart failures over time instead of scrolling logs.
 ![Production health](docs/screenshots/production-health.png)
 
 **Self-maintenance.** The database, the bots and the dashboards run as OS services with
-automatic restart. Cycles take a lock so two runs of the same scraper cannot overlap, and
+automatic restart. Cycles take a lock so two runs of the same collector cannot overlap, and
 the watchdog clears locks left behind by a dead process. A startup script brings everything
 back in order after a reboot or a power cut. Disk cleanup runs daily. A backup to a
 separate physical disk runs weekly, and I tested the restore, because an untested backup is
@@ -159,7 +158,7 @@ How a cycle and the watchdog interact:
 ```mermaid
 flowchart TD
     subgraph cycle["Scheduled cycle"]
-        L["take lock"] --> SC["scrape"] --> GD{"rows vs<br/>catalog?"}
+        L["take lock"] --> SC["collect"] --> GD{"rows vs<br/>catalog?"}
         GD -- "far fewer" --> RF["refuse to write<br/>alert"]
         GD -- "ok" --> LD["load + classify"] --> AN["analyze + score"] --> AL["alerts to Telegram"] --> UL["release lock"]
     end
