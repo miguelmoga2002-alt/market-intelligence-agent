@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Watchdog — production health checks.
+ * Watchdog - production health checks.
  *
  * The system runs 24/7 and ingests continuously, so the failure mode that matters is
  * the SILENT one: a step that runs but stops producing. The core principle here is
@@ -9,7 +9,7 @@
  *
  * Two ideas from the real system are shown:
  *   1. Each check targets the REAL signal of its component (a fresh row, a recent file,
- *      a non-empty result) — not a generic "is the process up".
+ *      a non-empty result) - not a generic "is the process up".
  *   2. Every alert carries a "GO TO": the exact command to diagnose it and how to read
  *      the result, so an alert is actionable instead of just noise.
  *
@@ -41,7 +41,7 @@ const checks = [
       return { ok: ageMin < 180, detail: `last row ${ageMin} min ago` };
     },
     "Inspect the latest ingest log and the DB max(seen_at). If stale, the scraper " +
-      "step is not writing — check for auth/session errors before restarting."
+      "step is not writing - check for auth/session errors before restarting."
   ),
 
   // Classifier output: is the pipeline still classifying, or silently passing junk?
@@ -51,7 +51,7 @@ const checks = [
       const pct = ctx.classifiedPct;
       return { ok: pct >= 90, detail: `${pct}% classified in last batch` };
     },
-    "A broken classifier does not error — it just stops matching. Diff the last batch " +
+    "A broken classifier does not error - it just stops matching. Diff the last batch " +
       "against a known-good one and check the classifier rules, then backfill."
   ),
 
@@ -63,7 +63,7 @@ const checks = [
       return { ok: ratio >= 0.5, detail: `run/accumulated = ${(ratio * 100).toFixed(0)}%` };
     },
     "A run returning <50% of the accumulated catalog is suspicious (a bad/empty run). " +
-      "The writer must NOT overwrite in that case — verify the guard tripped and the " +
+      "The writer must NOT overwrite in that case - verify the guard tripped and the " +
       "previous data is intact."
   ),
 

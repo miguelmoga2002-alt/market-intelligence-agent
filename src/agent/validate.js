@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Parameter validation — the security boundary between the model and the database.
+ * Parameter validation - the security boundary between the model and the database.
  *
  * The model proposes {tool, params}. Before those params reach any query, they pass
  * through here. The rule is: "the model proposes, the code validates." Anything the

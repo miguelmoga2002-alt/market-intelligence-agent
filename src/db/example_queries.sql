@@ -1,6 +1,6 @@
 -- Example read-only queries used by the agent's tools.
 --
--- These are the *shapes* the tools run. Every one is parametrized ($1, $2, ...) — model
+-- These are the *shapes* the tools run. Every one is parametrized ($1, $2, ...) - model
 -- output is bound as parameters, never concatenated. None of these expose the scoring
 -- or valuation logic; they are plain aggregation over the schema in schema.sql.
 

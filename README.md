@@ -3,107 +3,187 @@
 **A production AI agent that turns 10-15K daily marketplace listings into the handful of
 profitable opportunities worth acting on.**
 
-A local LLM (Ollama / Qwen) answers natural-language questions over a live PostgreSQL
-database of 500K+ marketplace listings — *without ever writing SQL itself*. The model
-chooses **which typed tool to call** and with **which parameters**; deterministic code
-validates every argument against a whitelist and runs read-only, parametrized queries.
-No cloud API, no data leaving the machine.
+I built this to stop reading marketplaces by hand. It scrapes second-hand listings around
+the clock, stores them in PostgreSQL, scores them, and lets me ask questions in plain
+language through a local LLM that never touches the database directly. Everything runs on
+one server at home. No cloud APIs, no data leaving the machine.
 
-> **Context.** I'm a self-taught developer. This is a sanitized portfolio extract of a
-> larger system I designed, built, and operate 24/7 for a family reselling business —
-> it monitors second-hand marketplaces to save manual research time and surface buying
-> opportunities. The scoring logic and data sources are the core of the business and are
-> **not** included here; the code in this repo is demo code with fictional data. What's
-> shown is the architecture and the engineering.
+> **Context.** I am self-taught. This is a sanitized extract of a larger system I designed,
+> built and operate 24/7 for a family reselling business. The scoring logic, the price
+> thresholds, the exact sources and the anti-bot handling are the core of that business and
+> are not in this repo. The code here is demo code with fictional data. What I want to show
+> is the architecture and how I run it in production.
 
 ---
 
 ## The problem
 
-Scanning the market by hand is impossible. The database holds 500K+ listings with
-10-15K new ones a day across several verticals (PC components, machinery, bikes). A fixed
-set of dashboards can't answer the long tail of natural questions — *"what's a used RTX
-4070 going for, and where is it cheapest?"*, *"how many sold this month?"*, *"compare the
-4070 vs the 4070 Ti"*. I needed an automatic funnel with judgment: from 10-15K raw
-listings a day down to the ~10-15 opportunities actually worth acting on.
+The database holds 500K+ listings and grows by 10-15K a day across several product
+categories (PC components, machinery, bikes). Reading that by hand is impossible, and a
+fixed set of dashboards cannot answer the questions I actually ask: what is a given part
+going for right now, where is it cheapest, how many sold last month, is this listing a
+good deal. I needed a funnel with judgment: from 10-15K new listings a day down to the
+10-15 worth a look.
 
-## What it does
+## How it works
 
-Three layers turn raw listings into decisions (full detail in
-[docs/architecture.md](docs/architecture.md)):
+Three layers, each one feeding the next:
 
 ```
-  Scrapers (Playwright) → PostgreSQL (ingest → classify → value)
-  → Scoring engine → LLM Agent (Ollama/Qwen + tool calling)
-  → Metabase dashboards + Telegram alerts
+  Scrapers (Playwright) -> PostgreSQL (ingest -> classify -> value)
+  -> Scoring -> LLM agent (Ollama/Qwen, tool calling)
+  -> Metabase dashboards + Telegram alerts
 ```
 
-The system runs 24/7. It scans the market while I sleep or work, flags opportunities, and
-I review and buy when one fits — replacing hours of manual research a day.
+The funnel, per day:
+
+```mermaid
+flowchart LR
+    A["10-15K new listings"] --> B["Dedup<br/>seen ids, stop on known streak"]
+    B --> C["Classify<br/>item type + model<br/>~97% automatic"]
+    C --> D["Filter junk<br/>suspicious, broken,<br/>packaging, for parts"]
+    D --> E["Value and score<br/>(private)"]
+    E --> F["10-15 opportunities"]
+    F --> G["Telegram alert<br/>with verdict buttons"]
+    G -. verdict stored .-> DB[("PostgreSQL")]
+    classDef s fill:#0d1117,stroke:#30363d,color:#c9d1d9;
+    class A,B,C,D,E,F,G,DB s;
+```
 
 ![Ecosystem scale](docs/screenshots/ecosystem-scale.png)
 
-## The AI agent
+### 1. Scraping
 
-The model **never writes SQL**. It's given a catalog of typed tools; it reads the question
-and returns which tool(s) to call and what parameters to pass. The code owns the query.
+One scraper per product category, written in Node.js with Playwright. Each one runs on a
+schedule, walks the marketplace search results, and appends what it finds to an
+accumulated catalog. It keeps a set of ids it has already seen, so each run only processes
+new listings and stops early when it hits a streak of known ones.
 
-```
-   user question ─▶ Agent ──(question + tool schemas)──▶ Local LLM (Ollama/Qwen)
-                      │                                        │
-                      │        ◀──(tool_calls: which tool, ────┘
-                      │            which params)
-                      ▼
-             validate params  ──▶  run read-only, parametrized SQL  ──▶  real rows
-                      │                                                     │
-                      └──────────(rows back to the model)──▶ LLM writes final answer
-```
+Two things I had to get right here:
 
-Three patterns were built and compared — a fixed intent-routed catalog, an LLM that writes
-SQL (contained by a read-only role), and this one, typed tool calling. **Tool calling
-won**: it keeps the flexibility of natural language while making unsafe output
-*structurally* impossible — there is no code path where model output becomes a query
-string. ([Why, in detail.](docs/architecture.md#the-agent-why-tool-calling))
+- **Stability under bot detection.** The marketplaces actively detect scrapers. Keeping
+  the scrapers stable was most of the work in this layer. How I do it is private.
+- **Never trusting a single run.** A run that returns far fewer listings than the catalog
+  already holds is treated as suspicious. The scraper refuses to overwrite and raises an
+  alert instead. I added this after an empty run silently wiped a large catalog and every
+  downstream table with it.
 
-**Safety, three layers:** the model only emits `{tool, params}`; every query is
-parametrized with bound values; the database user is read-only. On top of that — *the
-model proposes, the code validates*: any parameter outside the whitelist is dropped and
-reported, never silently used.
+Scrapers that hit different sites run in parallel. Scrapers that hit the same site run one
+at a time.
 
-The tools: `search_listings`, `count`, `median_price`, `opportunities`
-([definitions](src/tools/index.js)). The agent chains calls — a comparison of two models
-fires two `median_price` calls, then one written summary. See
-[examples/expected_output.md](examples/expected_output.md).
+### 2. Data
 
-## Engineering for production
+PostgreSQL is the source of truth. A loader takes the raw catalog, classifies each listing
+(what kind of item it is, which model it is), attaches an estimated value, and upserts it.
+The upsert never downgrades a known state: once a listing is marked sold, a later scrape
+cannot flip it back to available.
 
-What separates this from a hobby project:
+I keep the classifier as the only place where classification logic lives. If a rule is
+wrong I fix the classifier and backfill the table, never the other way round, because the
+next load would overwrite a hand fix.
 
-- **A watchdog that checks output, not liveness** — 20+ checks, each targeting the real
-  signal of its component, tested against known-bad historical inputs (because "0 alerts"
-  only proves no false positives, not that the check works).
-  ![Production health](docs/screenshots/production-health.png)
-- **An anti-wipe guard** — a run returning far fewer rows than the accumulated catalog
-  refuses to overwrite and alerts, so one bad run can't erase weeks of data.
-- **Observability as data** — every incident is written to a table, so the failure
-  history is queryable and charted.
-- **Tested backups and least privilege** — backups are restore-tested; the agent runs
-  read-only.
-
-The data pipeline that feeds all this — ingest, classification, junk-filtering — is a
-system in itself:
+The scoring step (private) reads that table and flags the listings worth acting on. A
+separate process revisits published listings a few days later to detect which ones sold,
+which gives me a sold-price signal to compare against asking prices.
 
 ![Data quality pipeline](docs/screenshots/data-quality-pipeline.png)
 
+### 3. The agent
+
+This is the part I care most about. I run Qwen 2.5 14B locally through Ollama and let it
+answer questions over the database. The rule is simple: **the model never writes SQL**.
+
+```
+   question ---> agent ---(question + tool schemas)---> local LLM
+                   |                                        |
+                   |   <---(tool_calls: which tool,  <------+
+                   |         which parameters)
+                   v
+        validate parameters --> run read-only parametrized SQL --> rows
+                   |                                                |
+                   +-----------(rows back to the model)-----> LLM writes the answer
+```
+
+The model gets a catalog of typed tools (`search_listings`, `count`, `median_price`,
+`opportunities`). It reads the question and returns which tool to call and with what
+arguments. My code validates every argument against a whitelist, runs a hand-written
+parametrized query as a read-only database user, and hands the rows back so the model can
+write the answer from real data. A comparison between two models triggers two
+`median_price` calls and one summary. See [examples/expected_output.md](examples/expected_output.md).
+
+I tried three approaches before settling on this one:
+
+1. A fixed catalog of queries where the model only picks one and extracts parameters. Safe
+   but rigid. Every new question needed a new query.
+2. Letting the model write SQL, contained by a read-only role. Flexible, but it invented
+   columns and figures, and I could not trust the output.
+3. Typed tool calling. Same flexibility as option 2, but there is no code path where model
+   output becomes a query string. That is why I kept it.
+
+Safety comes from three independent layers, not from the prompt: the model only emits
+`{tool, params}`; every query uses bound parameters; the database role cannot write. On top
+of that, any argument outside the whitelist is dropped and reported rather than silently
+used. The details are in [docs/architecture.md](docs/architecture.md).
+
+### 4. Alerts, watchdog and self-maintenance
+
+The whole thing has to run unattended, so I spent real effort on the operations side.
+
+**Alerts.** Each scraping cycle pushes its findings to Telegram: new opportunities as
+individual messages with inline buttons so I can mark a verdict from my phone, and a
+grouped digest at the end. Those verdicts are stored back in the database.
+
+**Watchdog.** A separate process runs every 15 minutes with 20+ checks. The principle is
+that a process being alive tells me nothing; I check that each component **produced its
+output**: fresh rows, a regenerated price table, a completed cycle with results, a fraud
+filter that still caught something today. Each check knows the real log pattern of the
+component it watches, because every scraper writes differently and a generic check matches
+none of them. I tested the checks against old broken logs, not only against a healthy
+system, since zero alerts only proves the absence of false positives.
+
+Every alert carries a "go to" line: the command to run and how to read its output. When a
+condition clears, the watchdog sends a resolved message on its own. Every incident is
+written to a table, so I can chart failures over time instead of scrolling logs.
+
+![Production health](docs/screenshots/production-health.png)
+
+**Self-maintenance.** The database, the bots and the dashboards run as OS services with
+automatic restart. Cycles take a lock so two runs of the same scraper cannot overlap, and
+the watchdog clears locks left behind by a dead process. A startup script brings everything
+back in order after a reboot or a power cut. Disk cleanup runs daily. A backup to a
+separate physical disk runs weekly, and I tested the restore, because an untested backup is
+a hope, not a backup.
+
+How a cycle and the watchdog interact:
+
+```mermaid
+flowchart TD
+    subgraph cycle["Scheduled cycle"]
+        L["take lock"] --> SC["scrape"] --> GD{"rows vs<br/>catalog?"}
+        GD -- "far fewer" --> RF["refuse to write<br/>alert"]
+        GD -- "ok" --> LD["load + classify"] --> AN["analyze + score"] --> AL["alerts to Telegram"] --> UL["release lock"]
+    end
+    subgraph wd["Watchdog, every 15 min"]
+        CK["20+ checks:<br/>did each step PRODUCE?"] --> INC[("incidents table")]
+        CK -- "failing" --> TG["alert + go-to command"]
+        CK -- "cleared" --> RS["resolved message"]
+        CK -- "dead process" --> CL["clear stale lock"]
+    end
+    UL -.-> CK
+    RF -.-> CK
+    classDef s fill:#0d1117,stroke:#30363d,color:#c9d1d9;
+    class L,SC,GD,RF,LD,AN,AL,UL,CK,INC,TG,RS,CL s;
+```
+
 ## Tech stack
 
-JavaScript · TypeScript · Node.js · PostgreSQL · Playwright · Ollama / Qwen 2.5 ·
-n8n · Metabase. Designed to run 24/7 on a single server.
+JavaScript, TypeScript, Node.js, PostgreSQL, Playwright, Ollama with Qwen 2.5, n8n,
+Metabase, Telegram Bot API. One Windows server, one NVIDIA GPU for the local model.
 
-## Running
+## Running the demo
 
-The demo code runs with fictional data. The agent needs a local
-[Ollama](https://ollama.com) with a tool-capable model:
+The code in `src/` runs against fictional in-memory data. The agent needs a local
+[Ollama](https://ollama.com) with a model that supports tool calling.
 
 ```bash
 npm run check                      # syntax-check all modules
@@ -112,27 +192,26 @@ node examples/ask.js "what's the RTX 4070 going for?"
 node examples/ask.js "compare the RTX 4070 and the 4070 Ti"
 ```
 
-(No Ollama? [examples/expected_output.md](examples/expected_output.md) shows what a run
-looks like.)
+Without Ollama, [examples/expected_output.md](examples/expected_output.md) shows what a run
+looks like.
 
 ## Repository layout
 
 ```
-src/agent/       the agent: tool-calling loop + whitelist validation
+src/agent/       tool-calling loop and whitelist validation
 src/tools/       typed tool definitions the model can call
-src/db/          SQL schema, example read queries, data-access layer
-src/monitoring/  watchdog / health checks
-examples/        runnable usage examples
-docs/            architecture + dashboard screenshots
+src/db/          schema, example read queries, data-access layer
+src/monitoring/  watchdog and health checks
+examples/        runnable examples
+docs/            architecture notes and dashboard screenshots
 ```
 
-## A note on scope
+## Scope
 
-This repo shows the **architecture and patterns**. The scoring logic, price thresholds,
-data sources, and the exact models that carry margin are private — they're the core of the
-business. That boundary is deliberate: a portfolio should demonstrate how you build, not
-give away what makes the system work.
+This repo shows the architecture and the patterns. The scoring formulas, the price
+thresholds, the data sources, the anti-bot handling and the exact models that carry margin
+are private. I am happy to walk through the reasoning behind any of it in a conversation.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

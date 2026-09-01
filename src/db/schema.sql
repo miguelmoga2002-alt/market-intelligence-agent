@@ -84,7 +84,7 @@ CREATE INDEX idx_incidents_created ON incidents (created_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- Least-privilege: the agent connects as a read-only role. Even a bad query
--- cannot modify data — the permission model enforces it, not a prompt.
+-- cannot modify data - the permission model enforces it, not a prompt.
 -- ---------------------------------------------------------------------------
 -- CREATE ROLE agent_reader LOGIN PASSWORD '...';
 -- GRANT CONNECT ON DATABASE market_intel TO agent_reader;

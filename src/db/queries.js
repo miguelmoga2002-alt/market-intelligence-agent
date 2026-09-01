@@ -8,7 +8,7 @@
  *      ($1, $2, ...). Values coming from the model are passed as parameters, never
  *      concatenated into the SQL string.
  *   2. The database connection uses a READ-ONLY role. Even a hypothetical bad query
- *      cannot modify data — the permission model enforces it, not a prompt.
+ *      cannot modify data - the permission model enforces it, not a prompt.
  *
  * Portfolio note: to keep the sample runnable without a database, the functions below
  * return fictional in-memory data. The real system runs these against PostgreSQL via a

@@ -20,7 +20,7 @@ A: The RTX 4070 has a median price of about 575 (6 samples), ranging from 520 to
 
 ---
 
-**A comparison** makes the model call `median_price` once per model, then summarize —
+**A comparison** makes the model call `median_price` once per model, then summarize -
 this is the behaviour the system prompt enforces:
 
 ```

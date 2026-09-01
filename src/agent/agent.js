@@ -15,7 +15,7 @@
  * Three patterns were built and compared for this system (see docs/architecture.md):
  *   (a) a fixed catalog of intent-routed queries,
  *   (b) an LLM that writes SQL, contained by a read-only DB user,
- *   (c) this one — typed tool calling.
+ *   (c) this one - typed tool calling.
  * (c) won: it keeps the model's flexibility while making unsafe output structurally
  * impossible (there is no code path where model output becomes a query string).
  *
