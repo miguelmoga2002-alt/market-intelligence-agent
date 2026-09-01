@@ -18,7 +18,7 @@ one server at home. No cloud APIs, no data leaving the machine.
 
 ## The problem
 
-The database holds 500K+ listings and grows by 10-15K a day across several product
+The database holds 400K+ listings and grows by 10-15K a day across several product
 categories (PC components, machinery, bikes). Reading that by hand is impossible, and a
 fixed set of dashboards cannot answer the questions I actually ask: what is a given part
 going for right now, where is it cheapest, how many sold last month, is this listing a
