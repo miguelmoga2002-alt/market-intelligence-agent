@@ -7,8 +7,8 @@ listings and help operate itself, with no data sent to cloud AI services.**
 
 I work in sales. I built this for my own resale operation, where the bottleneck is sourcing: in
 this niche the best listings are gone within minutes. The system reads the market for me, decides
-what deserves attention and puts it on my phone. The next step is to bring it to my family's
-business once I have finished hardening it.
+what deserves attention and puts it on my phone. Once it is fully hardened, I will also adapt it
+for my family's business, where I bring in technology to save time and staff.
 
 > **What this repo is.** A public, sanitized view of a private production system: how it is
 > designed, where the AI agents fit and how I run it. The code in `src/` is a runnable demo on
@@ -206,13 +206,13 @@ More detail in [docs/architecture.md](docs/architecture.md).
 
 ## How I build it
 
-I am not a software engineer by training. I design the system, take every product and risk
-decision, and operate it. The code is written with an AI pair engineer (Claude) under a protocol I
-set and enforce:
+I am not a software engineer by training. I orchestrate the whole system, from the architecture
+and the product rules to every risk decision and its day-to-day operation, and I program it with
+AI, specifically Claude, under a protocol I set and enforce:
 
 ```mermaid
 flowchart LR
-    D["Diagnose<br/>measure against the data"] --> C["AI delivers the change<br/>complete, idempotent, backed up"]
+    D["Diagnose<br/>measure against the data"] --> C["I program the change with Claude<br/>complete, idempotent, backed up"]
     C --> X["I run it on the real server"]
     X --> V["Verify the real output<br/>nothing is done without it"]
     V --> W["Sync, commit the why,<br/>changelog, lesson"]
@@ -244,8 +244,8 @@ again, not to discard it.
 - **Reliability.** Monitoring that checks output, self-healing, a runbook in every alert, restores
   that are actually tested.
 - **Product judgment.** Precision over volume, labels over filters, measure before building.
-- **AI-assisted engineering.** Building and running production software as a non-developer by
-  directing an AI under a verification protocol.
+- **AI-assisted engineering.** Orchestrating, programming and running production software with
+  Claude under a verification protocol, without a software engineering background.
 
 ## Lessons that cost something
 
@@ -295,9 +295,9 @@ docs/            architecture and agents notes
 
 ## What's next
 
-- **Take it to the family business.** The same platform, pointed at its sourcing, once it has
-  proven here that it runs unattended. That is why so much of the recent work is about
-  robustness rather than new features.
+- **Adapt it for the family business,** where I bring in technology to save time and staff: the
+  same platform, pointed at its sourcing, once it has proven here that it runs unattended. That is
+  why so much of the recent work is about robustness rather than new features.
 - **Value a PC part by part.** Finish the component classes still missing (motherboard, storage,
   power supply) so every complete PC gets a full teardown valuation, then calibrate it against
   observed sales.
