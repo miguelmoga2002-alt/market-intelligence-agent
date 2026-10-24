@@ -6,18 +6,17 @@
  * Flow:
  *   1. Send the user's question + the typed tool schemas to the model.
  *   2. The model replies with tool_calls: which tool(s) to run and with what params.
- *      (The model never writes SQL. It only chooses tools and arguments.)
+ *      (In this tier the model never writes SQL. It only chooses tools and arguments.)
  *   3. For each call: validate params against the whitelist, then run the tool
  *      (which executes read-only, parametrized SQL) and collect the real rows.
  *   4. Send the results back to the model so it writes the final answer, grounded
  *      in real data rather than invented figures.
  *
- * Three patterns were built and compared for this system (see docs/architecture.md):
- *   (a) a fixed catalog of intent-routed queries,
- *   (b) an LLM that writes SQL, contained by a read-only DB user,
- *   (c) this one - typed tool calling.
- * (c) won: it keeps the model's flexibility while making unsafe output structurally
- * impossible (there is no code path where model output becomes a query string).
+ * In production this is one tier of a cascade ordered by trust (see docs/agents.md):
+ *   deterministic code first, then (c) typed tool calling (this file), then
+ *   (a) a verified catalog of parametrized queries, and only as a last resort
+ *   (b) model-written SQL inside a read-only role with a SELECT-only validator.
+ * In this tier there is no code path where model output becomes a query string.
  *
  * Portfolio note: the Ollama call is real and correct; run against a local Ollama with
  * a tool-capable model. Data and tools here are demo.

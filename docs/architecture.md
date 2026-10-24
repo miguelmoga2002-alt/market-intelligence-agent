@@ -1,106 +1,149 @@
 # Architecture
 
-## The three layers
+One Windows server runs everything: the collectors, PostgreSQL, the local models, the dashboards
+and the bots. 65+ scheduled jobs and 7 always-on services, declared in one file and watched by
+one watchdog.
 
 ```mermaid
 flowchart TD
-    subgraph capture["1. Capture"]
-        S["Collectors (Playwright)<br/>one per category, on a schedule"]
+    subgraph capture["1 · Capture"]
+        CY["Catalog cycles<br/>all categories, every few hours"]
+        RD["34 radars<br/>focus categories, every 1-30 min"]
+        BF["Backfill engine<br/>one config + one dictionary per marketplace"]
     end
-    subgraph data["2. Data"]
-        DB[("PostgreSQL<br/>source of truth")]
-        P["ingest, classify, value<br/>(idempotent upserts)"]
-        S --> P --> DB
+    subgraph data["2 · Data"]
+        CL["Classifier<br/>8 languages"]
+        DB[("PostgreSQL<br/>listings · alerts · observed sales · real operations")]
+        VS["Sales verifier<br/>revisits listings until they sell"]
+        CY & BF --> CL --> DB
+        RD --> CL
+        VS --> DB
     end
-    subgraph intel["3. Intelligence"]
-        SC["Scoring<br/>(private logic)"]
-        AG["LLM agent<br/>Ollama, Qwen, tool calling"]
+    subgraph intel["3 · Intelligence"]
+        SC["Scoring + teardown valuation<br/>(private)"]
+        AG["Local agents<br/>data · inventory · ops"]
         DB --> SC --> DB
-        DB --> AG
+        DB <--> AG
     end
     subgraph out["Surfaces"]
-        M["Metabase dashboards"]
-        T["Telegram alerts and Q&A"]
+        TG["Telegram, one channel per product line"]
+        PN["Private alert panel"]
+        MB["Metabase"]
+        WEB["Public daily snapshot"]
     end
-    AG --> T
-    DB --> M
-
+    SC --> TG
+    DB --> PN & MB & WEB
     classDef box fill:#0d1117,stroke:#30363d,color:#c9d1d9;
-    class S,DB,P,SC,AG,M,T box;
+    class CY,RD,BF,CL,DB,VS,SC,AG,TG,PN,MB,WEB box;
 ```
 
-**Capture.** One collector per product category. Each keeps the ids it has already seen and
-processes only new listings. A run that returns far fewer rows than the accumulated catalog
-is refused and reported instead of written. Collectors for different sites run in parallel;
-collectors for the same site run in series.
+## Capture
 
-**Data.** PostgreSQL holds everything. A loader classifies each listing (type, category,
-detected model), attaches an estimated value and upserts. Upserts never downgrade a known
-state. The classifier is the single place where classification rules live; fixes go there
-and then get backfilled, never patched by hand in the table. All query access from the agent
-goes through a read-only role.
+**Catalog cycles** keep the price database complete for every category: PC components, complete
+PCs, laptops, servers, bikes and machinery. Each one keeps the ids it has already seen, processes
+only new listings and stops early when it meets a streak of known ones. Cycles that hit the same
+site never overlap; cycles for different sites run in parallel.
 
-**Intelligence.** A private scoring step flags the listings worth acting on. The agent sits
-on top and answers questions by calling typed tools. Results surface as Metabase dashboards
-and Telegram alerts.
+**Radars** watch the focus categories in every marketplace, each one as an independent job with
+its own lock, so a slow or blocked site never holds back the others. Their pace adapts: a radar
+climbs to a faster interval after a run of clean passes, drops back at the first sign of
+resistance, and switches itself off when a site blocks it. A radar never tries to push through a
+block, because the server's network identity is the scarce resource, not CPU or memory.
 
-## The agent: why tool calling
+**The backfill engine** brings a marketplace's catalog into the database. Everything specific to
+a site is in its configuration (language, search terms, how to read a results page); the engine,
+the classifier and the guards are shared. Opening a new country is a configuration and a
+dictionary, plus a manual market sample before any of it is built.
 
-I built three versions and kept the third.
+## Data
 
-| Pattern | How it works | Result |
-|---|---|---|
-| **A. Intent-routed catalog** | A fixed set of parametrized queries. The model picks one and extracts the parameters. | Safe but rigid. Every new question needed a new hand-written query. |
-| **B. LLM writes SQL** | The model generates SQL, contained by a read-only DB role. | Flexible, but it invented columns and figures. I could not trust it. |
-| **C. Typed tool calling** | The model returns `{tool, params}`. Code validates and runs the query. | **Kept.** Same flexibility as B, and there is no code path where model output becomes a query string. |
+PostgreSQL is the only source of truth. A loader classifies each listing (item type, model,
+components, memory spec), attaches the system's estimate and upserts it. Upserts never downgrade
+a known state: once a listing is marked sold, a later capture cannot flip it back.
 
-The property that decided it: in C, flexibility and safety stop being a trade-off. The model
-chooses a tool and arguments, the arguments are checked against a whitelist, and the query
-is hand-written and parametrized.
+- **Classifier first.** The classifier is the only place classification rules live. A wrong rule
+  is fixed there and the next load rewrites the table; a fix made only in the database would be
+  overwritten.
+- **Languages are data, not code.** Each language is a self-contained dictionary block. Each block
+  records whether it was validated against a sample of real listings or only translated.
+- **Observed sales.** A verifier revisits published listings and records which ones sold and how
+  long they took, so asking prices can be compared with what actually sells.
+- **Alerts are data.** Every radar alert is written to its own table with the detected model and
+  spec, through a queue with a checkpoint, so a database outage delays the load instead of losing
+  alerts.
+- **Real operations.** A ledger for real purchases and sales, including teardowns where one
+  purchase becomes several sales, is written by fixed, parametrized SQL only.
 
-## Safety model
+## Intelligence
 
-Three independent layers. None of them depends on the prompt.
+The private scoring step values each listing against observed market references and decides what
+is worth an alert. For complete PCs it adds a teardown valuation: what the parts are worth
+separately. The agents sit on top; see [agents.md](agents.md).
 
-1. The model never emits SQL, only `{tool, parameters}`.
-2. Every query is parametrized (`$1, $2, ...`). Model values are bound, never concatenated.
-3. The database role is read-only. A bad query cannot modify data.
+## Operations
 
-On top of that, enum-like parameters (category, platform, item type, status) are checked
-against the real list of values. Anything outside it is dropped and reported, so a
-hallucinated value cannot silently change the result.
+**Watchdog.** 51 checks every 15 minutes. Each one checks that its component *produced*
+something: fresh rows per marketplace and category, completed radar passes, backfills that reach
+the database, sold-detection sensors that still fire, a junk filter that still catches junk,
+valid backups. Each check knows the real log format of what it watches, and each one was tested
+against old broken logs as well as against a healthy system.
 
-## Running it in production
+**Alerts with a runbook.** Every alert carries a *go to* line with the command to run and how to
+read the output. When a condition clears the watchdog sends a resolved message. Every incident is
+written to a table, so failures can be charted and queried.
 
-- **Watchdog that checks output, not liveness.** 20+ checks every 15 minutes. Each one
-  targets the real signal of its component and is tested against old broken logs, because
-  zero alerts only proves the absence of false positives.
-- **Anti-wipe guard.** A run returning far fewer rows than the accumulated catalog does not
-  overwrite. It keeps the previous data and alerts. An empty run once wiped a large catalog
-  silently; this guard exists because of that.
-- **Incidents as data.** Every alert is written to a table, so failures can be charted and
-  queried instead of grepped.
-- **Tested backups, least privilege.** Weekly backup to a separate physical disk, restore
-  tested. The agent runs as a read-only role.
-- **Supervised services and clean restarts.** Database, bots and dashboards run as OS
-  services with automatic restart. Cycles take a lock to avoid overlapping runs. A startup
-  script brings everything back after a reboot.
+**Self-healing.**
+
+- Collectors hung for too long are killed together with their whole process tree.
+- A cycle that fails on a site block gets one automatic retry, later, from the watchdog.
+- Locks left by dead processes are cleared.
+- Radars brake and recover by themselves.
+- A job that is switched off without a declared pause raises an alert; a declared pause is shown
+  apart and never undone by a restart.
+- The watchdog and the sales verifier watch each other through a heartbeat.
+
+**Data safety.**
+
+- Every file that accumulates a catalog refuses a run that returns far less than it holds. This
+  guard exists because an empty run once overwrote a 142,632-listing catalog with exit code 0.
+- Radar state files are written atomically: write a temporary file, then rename.
+- The database is dumped every night to two physical disks, and a restore is tested
+  automatically every week.
+- The largest catalog restores itself from the last validated backup if it is ever corrupted.
+  Backups validate what they copy, so they never preserve a file that is already broken.
+- Secrets live outside the code and outside the repository.
+
+**Recovery.** After a power cut, a boot-time job brings the whole system back in order with nobody
+logged in. A controlled shutdown stops everything in order and kills what hangs after a timeout.
+
+## The declared ecosystem
+
+One declaration file is the source of truth for what should exist: verticals, cycles, radars,
+services, data files and their guards, log patterns and production thresholds, declared pauses.
+
+- A validator compares the declaration with what is installed (jobs, services, guards, checks) and
+  must report *all consistent* before any commit.
+- The inventory of the system is generated from the machine itself and regenerated on every sync.
+  It is never edited by hand.
+- Adding a vertical or a marketplace follows a fixed order: declare it, create its job, add the
+  anti-wipe guard if it accumulates, add its production check with the real log pattern, test the
+  check against broken history, validate.
 
 ## How I work
 
 ```mermaid
 flowchart LR
-    D["Diagnose<br/>reproduce the cause"] --> M["Measure<br/>impact before changing"]
-    M --> C["Change<br/>idempotent, with backup"]
+    D["Diagnose<br/>reproduce the cause"] --> M["Measure<br/>impact against the data"]
+    M --> C["Change<br/>idempotent, backed up"]
     C --> V["Verify in production<br/>real output, not assumptions"]
-    V --> W["Write it down<br/>commit + changelog + lesson"]
-    W -. next issue .-> D
+    V --> W["Write it down<br/>sync · commit the why · changelog · lesson"]
+    W -. next change .-> D
     classDef s fill:#0d1117,stroke:#30363d,color:#c9d1d9;
     class D,M,C,V,W s;
 ```
 
-
 - Diagnose before touching. Reproduce the cause first.
+- Measure before adding a rule. One keyword would have mislabeled 1,028 bikes.
 - Deliver, execute, verify. A change without observed output is not done.
-- Hunt silent failures, the ones that do not error but stop producing output.
-- Keep changes idempotent. Write down every wrong hypothesis so it is paid for once.
+- Check for duplicated functions before patching: patch every live copy or none.
+- One change open at a time, and write down every wrong hypothesis so it is paid for once.

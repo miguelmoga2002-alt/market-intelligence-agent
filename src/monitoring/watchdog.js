@@ -14,8 +14,8 @@
  *      the result, so an alert is actionable instead of just noise.
  *
  * Portfolio note: checks below run against fictional inputs so the file is runnable.
- * The real watchdog has 20+ checks and persists every incident to a table so the
- * failure history is queryable (see the "Production Health" dashboard screenshot).
+ * The real watchdog has 51 checks and persists every incident to a table so the
+ * failure history is queryable.
  */
 
 /** A check returns { name, ok, detail, goTo }. */

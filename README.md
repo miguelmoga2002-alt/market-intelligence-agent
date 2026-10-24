@@ -1,184 +1,271 @@
 # Market Intelligence Agent
 
-**A production AI agent that turns 10-15K daily marketplace listings into the handful of
-profitable opportunities worth acting on.**
+**A 24/7 market-intelligence system I designed, built and run on one home server. It watches 12
+second-hand marketplaces in 9 European countries, has captured 700K+ listings, re-scans its
+focus categories every 1 to 30 minutes, and uses local AI agents to answer questions, verify
+listings and help operate itself, with no data sent to cloud AI services.**
 
-I built this to stop reading marketplaces by hand. It collects second-hand listings around
-the clock, stores them in PostgreSQL, scores them, and lets me ask questions in plain
-language through a local LLM that never touches the database directly. There was no
-dataset to start from: every row in the database was collected by this system, from zero. Everything runs on
-one server at home. No cloud APIs, no data leaving the machine.
+I work in sales. I built this for my own resale operation, where the bottleneck is sourcing: in
+this niche the best listings are gone within minutes. The system reads the market for me, decides
+what deserves attention and puts it on my phone. The next step is to bring it to my family's
+business once I have finished hardening it.
 
-> **Context.** I am self-taught. This is a sanitized extract of a larger system I designed,
-> built and operate 24/7 for a family reselling business. The scoring logic, the price
-> thresholds, the exact sources and the anti-bot handling are the core of that business and
-> are not in this repo. The code here is demo code with fictional data. What I want to show
-> is the architecture and how I run it in production.
+> **What this repo is.** A public, sanitized view of a private production system: how it is
+> designed, where the AI agents fit and how I run it. The code in `src/` is a runnable demo on
+> fictional data. Scoring rules, valuation figures, thresholds, source names, collection
+> techniques and the product models that carry margin stay private.
 
----
+## At a glance
 
-## The problem
+Snapshot of 24 October 2026. Live figures, refreshed every morning from production, are on
+[miguelmoralesgarcia.es](https://miguelmoralesgarcia.es/sourcing-system).
 
-The database I have built with these collectors holds 400K+ listings and grows by
-10-15K a day across several product categories (PC components, machinery, bikes). Reading that by hand is impossible, and a
-fixed set of dashboards cannot answer the questions I actually ask: what is a given part
-going for right now, where is it cheapest, how many sold last month, is this listing a
-good deal. I needed a funnel with judgment: from 10-15K new listings a day down to the
-10-15 worth a look.
+| | |
+|---|---|
+| **Coverage** | 12 marketplaces in 9 countries: Spain, France, Italy, Germany, the Netherlands, Belgium, Poland, Portugal and Austria |
+| **Languages** | 8, each with its own classification dictionary |
+| **Data** | 709K listings captured, about 5K new every day, 94% classified automatically, 342K filtered out as junk or off-target |
+| **Sales signal** | 11.4K listings followed until they sold |
+| **Radars** | 34, re-scanning every 1 to 30 minutes on an adaptive pace that brakes at the first block; about 200 alerts a day |
+| **Automation** | 65+ scheduled jobs and 7 always-on services on one Windows server |
+| **Monitoring** | 51 checks every 15 minutes that test output, not just liveness |
+| **History** | 513 commits since 11 July 2026, each one explaining why |
+| **AI** | Local only: Ollama with Qwen 2.5 14B on a 24 GB GPU |
 
 ## How it works
 
-Three layers, each one feeding the next:
-
-```
-  Collectors (Playwright) -> PostgreSQL (ingest -> classify -> value)
-  -> Scoring -> LLM agent (Ollama/Qwen, tool calling)
-  -> Metabase dashboards + Telegram alerts
-```
-
-The funnel, per day:
-
 ```mermaid
 flowchart LR
-    A["10-15K new listings"] --> B["Dedup<br/>seen ids, stop on known streak"]
-    B --> C["Classify<br/>item type + model<br/>~97% automatic"]
-    C --> D["Filter junk<br/>suspicious, broken,<br/>packaging, for parts"]
-    D --> E["Value and score<br/>(private)"]
-    E --> F["10-15 opportunities"]
-    F --> G["Telegram alert<br/>with verdict buttons"]
-    G -. verdict stored .-> DB[("PostgreSQL")]
+    SRC["12 marketplaces<br/>9 countries · 8 languages"]
+    subgraph CAP["1 · Capture"]
+      C1["Catalog cycles<br/>every few hours"]
+      C2["34 radars<br/>every 1-30 min"]
+      C3["Backfill engine<br/>one config per site"]
+    end
+    subgraph UND["2 · Understand"]
+      K["Classify<br/>item, model, components"]
+      J["Filter junk<br/>boxes, parts, broken, suspicious"]
+    end
+    DB[("PostgreSQL<br/>single source of truth")]
+    subgraph ACT["3 · Act"]
+      A1["Alerts by product line"]
+      A2["Private alert panel"]
+      A3["Dashboards"]
+    end
+    G1["Data agent"]
+    G2["Inventory verifier"]
+    G3["Ops agent"]
+    W["Watchdog<br/>51 checks / 15 min"]
+    SRC --> C1 & C2 & C3 --> K --> J --> DB
+    DB --> A1 & A2 & A3
+    DB <--> G1
+    J --> G2 --> A1
+    W -.-> C2
+    W -.-> DB
+    W -.-> G3
     classDef s fill:#0d1117,stroke:#30363d,color:#c9d1d9;
-    class A,B,C,D,E,F,G,DB s;
+    class SRC,C1,C2,C3,K,J,DB,A1,A2,A3,G1,G2,G3,W s;
 ```
 
-![Ecosystem scale](docs/screenshots/ecosystem-scale.png)
+### 1. Capture, at two speeds
 
-### 1. Market data capture
+**Catalog cycles** crawl each category every few hours and keep the price database complete:
+PC components, complete PCs, laptops, servers, bikes and machinery. They are incremental: a run
+processes only new listings and stops when it meets a streak of ones it already knows.
 
-One collector per product category, written in Node.js with Playwright. Each one runs on a
-schedule, walks the marketplace search results, and appends what it finds to an
-accumulated catalog. It keeps a set of ids it has already seen, so each run only processes
-new listings and stops early when it hits a streak of known ones.
+**Radars** watch the focus categories (high-end graphics cards, server hardware and complete PCs
+built around a high-end card) so a good listing reaches my phone minutes after it goes live. Their
+pace is not fixed: a radar speeds up after clean passes, brakes on the first sign that a site is
+pushing back, and stops itself rather than insist.
 
-Two things I had to get right here:
+**A backfill engine** makes a new marketplace a configuration file (language, search terms, how
+to read a results page) instead of a new program. Every source goes through the same guards.
 
-- **Stability under bot detection.** The marketplaces actively detect automated traffic. Keeping the collectors stable was most of the work in this layer. How I do it is private.
-- **Never trusting a single run.** A run that returns far fewer listings than the catalog
-  already holds is treated as suspicious. The collector refuses to overwrite and raises an
-  alert instead. I added this after an empty run silently wiped a large catalog and every
-  downstream table with it.
+### 2. Understand each listing
 
-Collectors that hit different sites run in parallel. Collectors that hit the same site run one
-at a time.
+Titles are noisy, multilingual and often misleading. The classifier decides what is really for
+sale: a whole PC, a single part, an empty box, a cooler sold alone, a laptop described as a
+desktop. It extracts the model and, for complete PCs and servers, the components. Memory modules
+get a full spec read, and servers get their memory generation from the model generation. When
+the title is not enough, the radar also reads the description.
 
-### 2. Data
+- **One dictionary block per language.** Each block records whether it was validated against a
+  sample of real listings or only translated, and the two are never confused.
+- **The classifier is the only place classification rules live.** If a rule is wrong I fix the
+  classifier and let the next load rewrite the table. A fix made only in the database would be
+  overwritten by the next run.
 
-PostgreSQL is the source of truth. A loader takes the raw catalog, classifies each listing
-(what kind of item it is, which model it is), attaches an estimated value, and upserts it.
-The upsert never downgrades a known state: once a listing is marked sold, a later capture
-cannot flip it back to available.
+### 3. Act on it
 
-I keep the classifier as the only place where classification logic lives. If a rule is
-wrong I fix the classifier and backfill the table, never the other way round, because the
-next load would overwrite a hand fix.
+- Alerts go to a separate channel per product line, with what the system detected (model,
+  components, spec) so I can decide from the alert alone.
+- The same item relisted under a new id does not alert twice: the radars share a memory by content.
+  A price drop on a listing already seen arrives as a drop, with the previous price.
+- **Labels, not filters.** A price far below normal is flagged *verify in person*, never hidden.
+  Cheap is not the same as fake, and a filter that removes scams also removes the best deals.
+- A complete-PC alert carries a teardown line: what its parts are worth, computed by code.
+- Every alert is stored. A private, read-only panel lets me search and filter the alert history
+  from my phone over a private network.
 
-The scoring step (private) reads that table and flags the listings worth acting on. A
-separate process revisits published listings a few days later to detect which ones sold,
-which gives me a sold-price signal to compare against asking prices.
+## The AI agents
 
-![Data quality pipeline](docs/screenshots/data-quality-pipeline.png)
+All models run locally. The rule that took me longest to learn: **code detects and calculates;
+the model translates between people and code.** Every time a model was asked to judge, or to
+produce a figure, false data appeared.
 
-### 3. The agent
+| Agent | What it does | What it is never allowed to do |
+|---|---|---|
+| **Data agent** (Telegram) | Answers business questions in plain language over the whole database | Invent figures or links; write to the database |
+| **Inventory verifier** | Reads a complete-PC listing and lists what is in the box: parts present, missing or broken | Decide whether it is a deal. The code values the parts |
+| **Listing verifier** | Decides what is actually being sold before a bike deal is reported | Guess from keywords |
+| **Ops agent** (Telegram) | Reports health and hardware sensors, and runs a short list of maintenance actions on request | Run anything outside a closed list, or act without my confirmation |
 
-This is the part I care most about. I run Qwen 2.5 14B locally through Ollama and let it
-answer questions over the database. The rule is simple: **the model never writes SQL**.
-
-```
-   question ---> agent ---(question + tool schemas)---> local LLM
-                   |                                        |
-                   |   <---(tool_calls: which tool,  <------+
-                   |         which parameters)
-                   v
-        validate parameters --> run read-only parametrized SQL --> rows
-                   |                                                |
-                   +-----------(rows back to the model)-----> LLM writes the answer
-```
-
-The model gets a catalog of typed tools (`search_listings`, `count`, `median_price`,
-`opportunities`). It reads the question and returns which tool to call and with what
-arguments. My code validates every argument against a whitelist, runs a hand-written
-parametrized query as a read-only database user, and hands the rows back so the model can
-write the answer from real data. A comparison between two models triggers two
-`median_price` calls and one summary. See [examples/expected_output.md](examples/expected_output.md).
-
-I tried three approaches before settling on this one:
-
-1. A fixed catalog of queries where the model only picks one and extracts parameters. Safe
-   but rigid. Every new question needed a new query.
-2. Letting the model write SQL, contained by a read-only role. Flexible, but it invented
-   columns and figures, and I could not trust the output.
-3. Typed tool calling. Same flexibility as option 2, but there is no code path where model
-   output becomes a query string. That is why I kept it.
-
-Safety comes from three independent layers, not from the prompt: the model only emits
-`{tool, params}`; every query uses bound parameters; the database role cannot write. On top
-of that, any argument outside the whitelist is dropped and reported rather than silently
-used. The details are in [docs/architecture.md](docs/architecture.md).
-
-### 4. Alerts, watchdog and self-maintenance
-
-The whole thing has to run unattended, so I spent real effort on the operations side.
-
-**Alerts.** Each capture cycle pushes its findings to Telegram: new opportunities as
-individual messages with inline buttons so I can mark a verdict from my phone, and a
-grouped digest at the end. Those verdicts are stored back in the database.
-
-**Watchdog.** A separate process runs every 15 minutes with 20+ checks. The principle is
-that a process being alive tells me nothing; I check that each component **produced its
-output**: fresh rows, a regenerated price table, a completed cycle with results, a fraud
-filter that still caught something today. Each check knows the real log pattern of the
-component it watches, because every collector writes differently and a generic check matches
-none of them. I tested the checks against old broken logs, not only against a healthy
-system, since zero alerts only proves the absence of false positives.
-
-Every alert carries a "go to" line: the command to run and how to read its output. When a
-condition clears, the watchdog sends a resolved message on its own. Every incident is
-written to a table, so I can chart failures over time instead of scrolling logs.
-
-![Production health](docs/screenshots/production-health.png)
-
-**Self-maintenance.** The database, the bots and the dashboards run as OS services with
-automatic restart. Cycles take a lock so two runs of the same collector cannot overlap, and
-the watchdog clears locks left behind by a dead process. A startup script brings everything
-back in order after a reboot or a power cut. Disk cleanup runs daily. A backup to a
-separate physical disk runs weekly, and I tested the restore, because an untested backup is
-a hope, not a backup.
-
-How a cycle and the watchdog interact:
+**The data agent is a cascade ordered by trust.** I built the three classic patterns (a fixed
+query catalog, typed tool calling and model-written SQL) and kept all three, in that order of
+preference. Code answers everything it can; the model writes SQL only as the last resort, inside a
+read-only role, with a SELECT-only validator, a forced row limit and a statement timeout. Every
+question that reaches that tier is logged, so the verified catalog grows from real use. The demo
+in `src/` implements the typed-tools tier.
 
 ```mermaid
 flowchart TD
-    subgraph cycle["Scheduled cycle"]
-        L["take lock"] --> SC["collect"] --> GD{"rows vs<br/>catalog?"}
-        GD -- "far fewer" --> RF["refuse to write<br/>alert"]
-        GD -- "ok" --> LD["load + classify"] --> AN["analyze + score"] --> AL["alerts to Telegram"] --> UL["release lock"]
+    Q["Question in plain language"] --> D1{"Answerable by code?<br/>valuation, ledger, status"}
+    D1 -- yes --> R1["Answer from code"]
+    D1 -- no --> T{"Typed tools<br/>model picks tool + arguments"}
+    T -- "tool used" --> R2["Rows from a parametrized query"]
+    T -- "no tool" --> C{"Verified query catalog<br/>model picks one + parameters"}
+    C -- match --> R3["Rows from a verified query"]
+    C -- "no match" --> S["Last resort: model writes SQL<br/>read-only role · SELECT only<br/>row limit · timeout · logged"]
+    R2 & R3 & S --> F["Model writes the answer from the rows<br/>links not in the rows are stripped"]
+    classDef s fill:#0d1117,stroke:#30363d,color:#c9d1d9;
+    class Q,D1,R1,T,R2,C,R3,S,F s;
+```
+
+**The inventory verifier asks what is in the box.** Ask a model whether a listing is a good deal
+and it says yes. So the verifier never judges: it lists components, what is missing and what is
+broken, and the code does the valuation. There are three outcomes: worth it as a teardown (alert
+with the breakdown), not worth it (silence), or very cheap with no visible reason (a separate
+*verify in person* alert). A missing graphics card is not a reason to discard a PC; it is
+information to value it again.
+
+**The ops agent can diagnose freely and act narrowly.** Every action needs my confirmation within
+60 seconds, and the name that gets executed comes from the system's own list of services and
+jobs, never from the text of the message.
+
+**Where I took the model out.** Watchdog alerts used to be paraphrased by the model; it repeated
+them and once advised re-running a collector whose IP was blocked. Alerts now go out exactly as
+the check wrote them. The daily summary and the business snapshot are computed by code, so numbers
+never pass through the model.
+
+More detail in [docs/agents.md](docs/agents.md).
+
+## Running it unattended
+
+```mermaid
+flowchart TD
+    subgraph cycle["Every job"]
+        L["take lock"] --> SC["collect"] --> GD{"rows vs<br/>stored catalog?"}
+        GD -- "far fewer" --> RF["refuse to overwrite<br/>alert"]
+        GD -- "ok" --> LD["classify + load<br/>(idempotent upsert)"] --> AL["alerts"] --> UL["release lock"]
     end
     subgraph wd["Watchdog, every 15 min"]
-        CK["20+ checks:<br/>did each step PRODUCE?"] --> INC[("incidents table")]
-        CK -- "failing" --> TG["alert + go-to command"]
-        CK -- "cleared" --> RS["resolved message"]
-        CK -- "dead process" --> CL["clear stale lock"]
+        CK["51 checks:<br/>did each step PRODUCE?"] --> INC[("incidents table")]
+        CK -- failing --> TG["alert + go-to command"]
+        CK -- cleared --> RS["resolved message"]
+        CK -- hung --> KL["kill process tree<br/>retry once"]
     end
     UL -.-> CK
     RF -.-> CK
     classDef s fill:#0d1117,stroke:#30363d,color:#c9d1d9;
-    class L,SC,GD,RF,LD,AN,AL,UL,CK,INC,TG,RS,CL s;
+    class L,SC,GD,RF,LD,AL,UL,CK,INC,TG,RS,KL s;
 ```
+
+- **Output, not liveness.** A process being alive tells me nothing. The checks ask whether each
+  marketplace and category is still adding rows, whether every radar completes passes, whether
+  each backfill reaches the database, whether the sold-detection sensors still fire and whether
+  the junk filter still catches something. Each check reads the real log format of what it
+  watches, and is tested against old broken logs: zero alerts only proves there are no false
+  positives.
+- **Every alert is actionable.** It carries a *go to* line with the command to run and how to
+  read its output, resolves itself when the condition clears, and is written to an incidents table.
+- **Self-healing.** Hung collectors are killed with their whole process tree, a cycle that fails
+  on a site block gets one automatic retry later, stale locks are cleared, and radars brake
+  themselves. A job switched off without a declared pause raises an alert. The watchdog and the
+  sales verifier watch each other through a heartbeat, so neither can die silently.
+- **Data safety.** A file that accumulates a catalog refuses to be overwritten by a run that
+  returns far less than it holds. Radar state is written atomically. The database is dumped every night to two
+  physical disks, a restore is tested automatically every week, and the largest catalog restores
+  itself from the last validated backup if it is ever corrupted. Secrets live outside the code.
+- **Recovery.** After a power cut the server brings the whole system back in order, with nobody
+  logged in.
+- **A declared ecosystem.** One declaration file lists every vertical, job and service. A validator
+  compares it with what is really installed and must report *all consistent* before any commit,
+  and the system inventory is generated from the machine itself, never written by hand.
+
+More detail in [docs/architecture.md](docs/architecture.md).
+
+## How I build it
+
+I am not a software engineer by training. I design the system, take every product and risk
+decision, and operate it. The code is written with an AI pair engineer (Claude) under a protocol I
+set and enforce:
+
+```mermaid
+flowchart LR
+    D["Diagnose<br/>measure against the data"] --> C["AI delivers the change<br/>complete, idempotent, backed up"]
+    C --> X["I run it on the real server"]
+    X --> V["Verify the real output<br/>nothing is done without it"]
+    V --> W["Sync, commit the why,<br/>changelog, lesson"]
+    W -. next change .-> D
+    classDef s fill:#0d1117,stroke:#30363d,color:#c9d1d9;
+    class D,C,X,V,W s;
+```
+
+- Diagnose before touching, and measure the impact against the database before adding any rule.
+- Every change is a complete script: backup first, a named marker so it cannot apply twice, and
+  exact anchors that abort unless they match once.
+- I run it on the real server and paste back the real output. Nothing counts as done until the
+  output shows it.
+- One change open at a time. Each one ends with a repo sync, a commit that explains why and a row
+  in the changelog. Wrong hypotheses are written down, so each mistake is paid for once.
+
+The domain rules come from me. Some of the most valuable ones started as me correcting the AI's
+design: never hide a deal for being cheap, and treat a missing part as a reason to value a listing
+again, not to discard it.
+
+## What this shows
+
+- **Systems design.** From one scraper to a declared platform where a new country is a
+  configuration file and a dictionary.
+- **Data engineering.** PostgreSQL as the single source of truth, idempotent upserts,
+  classifier-first fixes and guards on every dataset that accumulates.
+- **Applied AI.** Local models with tool calling, prompts tested against real listings, and knowing
+  when to take the model out.
+- **Reliability.** Monitoring that checks output, self-healing, a runbook in every alert, restores
+  that are actually tested.
+- **Product judgment.** Precision over volume, labels over filters, measure before building.
+- **AI-assisted engineering.** Building and running production software as a non-developer by
+  directing an AI under a verification protocol.
+
+## Lessons that cost something
+
+- An empty run once overwrote a 142,632-listing catalog, with exit code 0 and clean locks. Every
+  file that accumulates now has an anti-wipe guard.
+- A broken regex does not fail; it just never matches. Only real data catches it.
+- A function copied into five files is a fix waiting to be half done. Four copies were patched,
+  and a daily digest stayed at zero for three days.
+- One keyword rule would have mislabeled 1,028 bikes. Measuring first stopped it.
+- In an if/return cascade, the order is the logic.
+- A scheduler's "success" means the process ended, not that it did its job.
+- Asking "is this a part?" made the model see parts everywhere and discard complete bikes. Asking
+  "what is being sold?" fixed it.
+- If the data is wrong, no layer above it can fix it: data first, messenger second.
 
 ## Tech stack
 
-JavaScript, TypeScript, Node.js, PostgreSQL, Playwright, Ollama with Qwen 2.5, n8n,
-Metabase, Telegram Bot API. One Windows server, one NVIDIA GPU for the local model.
+Node.js, PowerShell, PostgreSQL 18, Playwright with headless Chrome, Ollama with Qwen 2.5 14B,
+Metabase, n8n, Telegram Bot API, Windows services and Task Scheduler, Tailscale, Git. One server:
+16-core CPU, 128 GB RAM, 24 GB GPU.
 
 ## Running the demo
 
@@ -198,32 +285,32 @@ looks like.
 ## Repository layout
 
 ```
-src/agent/       tool-calling loop and whitelist validation
+src/agent/       tool-calling loop and whitelist validation (the typed-tools tier)
 src/tools/       typed tool definitions the model can call
 src/db/          schema, example read queries, data-access layer
 src/monitoring/  watchdog and health checks
 examples/        runnable examples
-docs/            architecture notes and dashboard screenshots
+docs/            architecture and agents notes
 ```
 
 ## What's next
 
-The pipeline is built as a platform: a new market or a new product category means new
-collectors and a new classifier, while data, scoring, agent, alerts and watchdog stay the
-same. Three things I am working on now:
-
-- **Europe.** Extending the machinery and PC component collectors beyond Spain to other
-  European marketplaces, where the same arbitrage exists with a larger inventory.
-- **Real estate in Spain.** A new vertical on the same loop (capture, classify, value,
-  alert), applied to property listings.
-- **A stronger local model.** Moving the agent from a 14B to a 32B model now that the GPU
-  has room for it, and measuring whether the extra reasoning is worth the latency.
+- **Take it to the family business.** The same platform, pointed at its sourcing, once it has
+  proven here that it runs unattended. That is why so much of the recent work is about
+  robustness rather than new features.
+- **Value a PC part by part.** Finish the component classes still missing (motherboard, storage,
+  power supply) so every complete PC gets a full teardown valuation, then calibrate it against
+  observed sales.
+- **Vision.** Read the part numbers on photos of memory modules with a local vision model on a
+  second GPU.
+- **New countries only after measuring them.** Volume and prices are sampled by hand first; the
+  collector comes second.
 
 ## Scope
 
-This repo shows the architecture and the patterns. The scoring formulas, the price
-thresholds, the data sources, the anti-bot handling and the exact models that carry margin
-are private. I am happy to walk through the reasoning behind any of it in a conversation.
+This repo shows the architecture and the patterns. The scoring formulas, price thresholds, data
+sources, collection techniques and the product models that carry margin are private. I am happy
+to walk through the reasoning behind any of it in a conversation.
 
 ## License
 

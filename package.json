@@ -1,7 +1,7 @@
 {
   "name": "market-intelligence-agent",
   "version": "1.0.0",
-  "description": "A production AI agent that turns 10-15K daily marketplace listings into the handful of profitable opportunities worth acting on.",
+  "description": "24/7 market-intelligence system: 12 marketplaces in 9 countries, local LLM agents (Ollama/Qwen), PostgreSQL, self-monitoring operations. Demo of the typed tool-calling tier.",
   "type": "commonjs",
   "scripts": {
     "ask": "node examples/ask.js",

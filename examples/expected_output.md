@@ -48,5 +48,5 @@ Validation warnings:
   - dropped vertical='INVENTED' (not in whitelist [pc, bike, machinery, laptop])
 ```
 
-The model never writes SQL; it only chooses a tool and arguments, and the arguments are
-validated before anything runs.
+In this tier the model never writes SQL; it only chooses a tool and arguments, and the
+arguments are validated before anything runs.
