@@ -72,7 +72,7 @@ hallucinated value cannot silently change the result.
 
 ## Running it in production
 
-- **Watchdog that checks output, not liveness.** 20+ checks every 15 minutes. Each one
+- **Watchdog that checks output, not liveness.** 51 output checks every 15 minutes. Each one
   targets the real signal of its component and is tested against old broken logs, because
   zero alerts only proves the absence of false positives.
 - **Anti-wipe guard.** A run returning far fewer rows than the accumulated catalog does not

@@ -1,13 +1,15 @@
 # Market Intelligence Agent
 
-**A production AI agent that turns 10-15K daily marketplace listings into the handful of
-profitable opportunities worth acting on.**
+**A production AI agent that turns ~5K new listings a day, from 12 second-hand marketplaces in
+9 European countries, into the handful of profitable opportunities worth acting on.**
 
 I built this to stop reading marketplaces by hand. It collects second-hand listings around
 the clock, stores them in PostgreSQL, scores them, and lets me ask questions in plain
 language through a local LLM that never touches the database directly. There was no
 dataset to start from: every row in the database was collected by this system, from zero. Everything runs on
-one server at home. No cloud APIs, no data leaving the machine.
+one server at home. No cloud APIs, no data leaving the machine. It is one of four local agents
+in the system (a data agent, two listing verifiers and an ops agent); this repo shows the data
+agent.
 
 > **Context.** I am self-taught. This is a sanitized extract of a larger system I designed,
 > built and operate 24/7 for a family reselling business. The scoring logic, the price
@@ -19,12 +21,13 @@ one server at home. No cloud APIs, no data leaving the machine.
 
 ## The problem
 
-The database I have built with these collectors holds 400K+ listings and grows by
-10-15K a day across several product categories (PC components, machinery, bikes). Reading that by hand is impossible, and a
-fixed set of dashboards cannot answer the questions I actually ask: what is a given part
-going for right now, where is it cheapest, how many sold last month, is this listing a
-good deal. I needed a funnel with judgment: from 10-15K new listings a day down to the
-10-15 worth a look.
+The database I have built with these collectors holds 700K+ listings, collected from 12
+marketplaces in 9 countries and 8 languages, and grows by about 5K new listings a day across
+several product categories (PC components, machinery, bikes). Reading that by hand is
+impossible, and a fixed set of dashboards cannot answer the questions I actually ask: what
+is a given part going for right now, where is it cheapest, how many sold last month, is
+this listing a good deal. I needed a funnel with judgment: from about 5K new listings a day
+down to the 10-15 worth a look.
 
 ## How it works
 
@@ -40,8 +43,8 @@ The funnel, per day:
 
 ```mermaid
 flowchart LR
-    A["10-15K new listings"] --> B["Dedup<br/>seen ids, stop on known streak"]
-    B --> C["Classify<br/>item type + model<br/>~97% automatic"]
+    A["~5K new listings"] --> B["Dedup<br/>seen ids, stop on known streak"]
+    B --> C["Classify<br/>item type + model<br/>94% automatic"]
     C --> D["Filter junk<br/>suspicious, broken,<br/>packaging, for parts"]
     D --> E["Value and score<br/>(private)"]
     E --> F["10-15 opportunities"]
@@ -125,6 +128,11 @@ Safety comes from three independent layers, not from the prompt: the model only 
 of that, any argument outside the whitelist is dropped and reported rather than silently
 used. The details are in [docs/architecture.md](docs/architecture.md).
 
+**Update (November 2026).** In production the agent has since become a cascade ordered by
+trust: deterministic code first, then the typed tools, then a catalog of 26 verified queries,
+and model-written SQL only as a last resort, sandboxed (read-only, row-limited and logged).
+This extract shows the typed-tool layer.
+
 ### 4. Alerts, watchdog and self-maintenance
 
 The whole thing has to run unattended, so I spent real effort on the operations side.
@@ -133,7 +141,7 @@ The whole thing has to run unattended, so I spent real effort on the operations 
 individual messages with inline buttons so I can mark a verdict from my phone, and a
 grouped digest at the end. Those verdicts are stored back in the database.
 
-**Watchdog.** A separate process runs every 15 minutes with 20+ checks. The principle is
+**Watchdog.** A separate process runs every 15 minutes with 51 output checks. The principle is
 that a process being alive tells me nothing; I check that each component **produced its
 output**: fresh rows, a regenerated price table, a completed cycle with results, a fraud
 filter that still caught something today. Each check knows the real log pattern of the
@@ -147,12 +155,12 @@ written to a table, so I can chart failures over time instead of scrolling logs.
 
 ![Production health](docs/screenshots/production-health.png)
 
-**Self-maintenance.** The database, the bots and the dashboards run as OS services with
-automatic restart. Cycles take a lock so two runs of the same collector cannot overlap, and
+**Self-maintenance.** The database, the bots and the dashboards run as 7 always-on OS services
+with automatic restart, and 65+ scheduled jobs run on top of them. Cycles take a lock so two runs of the same collector cannot overlap, and
 the watchdog clears locks left behind by a dead process. A startup script brings everything
 back in order after a reboot or a power cut. Disk cleanup runs daily. A backup to a
-separate physical disk runs weekly, and I tested the restore, because an untested backup is
-a hope, not a backup.
+separate physical disk runs every night, and the restore is tested every week, because an
+untested backup is a hope, not a backup.
 
 How a cycle and the watchdog interact:
 
@@ -164,7 +172,7 @@ flowchart TD
         GD -- "ok" --> LD["load + classify"] --> AN["analyze + score"] --> AL["alerts to Telegram"] --> UL["release lock"]
     end
     subgraph wd["Watchdog, every 15 min"]
-        CK["20+ checks:<br/>did each step PRODUCE?"] --> INC[("incidents table")]
+        CK["51 output checks:<br/>did each step PRODUCE?"] --> INC[("incidents table")]
         CK -- "failing" --> TG["alert + go-to command"]
         CK -- "cleared" --> RS["resolved message"]
         CK -- "dead process" --> CL["clear stale lock"]
@@ -210,10 +218,9 @@ docs/            architecture notes and dashboard screenshots
 
 The pipeline is built as a platform: a new market or a new product category means new
 collectors and a new classifier, while data, scoring, agent, alerts and watchdog stay the
-same. Three things I am working on now:
+same. Since the first version it has grown from Spain to 12 second-hand marketplaces in 9
+European countries and 8 languages. What I am working on now:
 
-- **Europe.** Extending the machinery and PC component collectors beyond Spain to other
-  European marketplaces, where the same arbitrage exists with a larger inventory.
 - **Real estate in Spain.** A new vertical on the same loop (capture, classify, value,
   alert), applied to property listings.
 - **A stronger local model.** Moving the agent from a 14B to a 32B model now that the GPU
