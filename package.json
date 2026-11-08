@@ -1,7 +1,7 @@
 {
   "name": "market-intelligence-agent",
   "version": "1.0.0",
-  "description": "A production AI agent that turns 10-15K daily marketplace listings into the handful of profitable opportunities worth acting on.",
+  "description": "A production AI agent that turns ~5K new listings a day, from 12 second-hand marketplaces in 9 European countries, into the handful of profitable opportunities worth acting on.",
   "type": "commonjs",
   "scripts": {
     "ask": "node examples/ask.js",
